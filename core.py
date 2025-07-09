@@ -142,57 +142,48 @@ Your responses should sound natural and conversational. Remember you are an offi
     # Using a chat-specific ReAct prompt from the hub
     # Ensure this prompt supports 'chat_history'
     # The hwchase17/react-chat prompt includes `chat_history` in its input_variables
+    
+    prompt_from_hub = None
+    customization_successful = False
+
     try:
-        # Pull the base react-chat prompt from the hub
-        prompt = hub.pull("hwchase17/react-chat")
+        # Attempt to pull the prompt from the hub
+        pulled_prompt = hub.pull("hwchase17/react-chat")
 
-        # Customize the system message part of the pulled prompt
-        # The first message in this specific hub prompt is usually the system message.
-        # We are replacing its content with our detailed persona and rules.
-        # It's important to ensure that the prompt message list is mutable or to reconstruct it if not.
-        # Most hub prompts are instances of ChatPromptTemplate and their .messages list can be modified.
-
-        if prompt.messages and isinstance(prompt.messages[0], SystemMessage):
-            # If the first message is already a SystemMessage, update its content
-            prompt.messages[0] = SystemMessage(content=dbatu_persona_and_rules)
-        elif prompt.messages and hasattr(prompt.messages[0], 'prompt') and hasattr(prompt.messages[0].prompt, 'template') and "system" in prompt.messages[0].prompt.template.lower():
-             # Some prompts might have a SystemMessagePromptTemplate, try to update its template
-             # This part is a bit more heuristic, ideally, one would inspect the exact structure of "hwchase17/react-chat"
-             # For "hwchase17/react-chat", prompt.messages[0] is a SystemMessagePromptTemplate.
-             # We need to create a new SystemMessage with our content or replace the template string.
-             # The most straightforward way is to replace the SystemMessagePromptTemplate with a new SystemMessage.
-             prompt.messages[0] = SystemMessage(content=dbatu_persona_and_rules)
+        # Check if it's a ChatPromptTemplate and has messages to customize
+        if isinstance(pulled_prompt, ChatPromptTemplate) and pulled_prompt.messages:
+            # Attempt to customize the system message
+            # Make a copy or ensure modification is safe if the pulled prompt messages list is immutable
+            # For ChatPromptTemplate, .messages is usually a list of BaseMessagePromptTemplate
+            
+            # Simplest approach: replace the first message if it's a system message, otherwise insert.
+            # This assumes the first message is the most likely candidate for system instructions.
+            if isinstance(pulled_prompt.messages[0], SystemMessage) or \
+               (hasattr(pulled_prompt.messages[0], 'prompt') and isinstance(pulled_prompt.messages[0].prompt, SystemMessage)): # SystemMessagePromptTemplate
+                # If the first message is SystemMessage or SystemMessagePromptTemplate, replace its content
+                # Creating a new SystemMessage is safer than trying to modify template strings directly
+                pulled_prompt.messages[0] = SystemMessage(content=dbatu_persona_and_rules)
+            else:
+                # If not, insert our system message at the beginning
+                pulled_prompt.messages.insert(0, SystemMessage(content=dbatu_persona_and_rules))
+            
+            prompt_from_hub = pulled_prompt
+            customization_successful = True
+            # print("Successfully pulled and customized prompt from hub.") # For debugging
         else:
-            # If no clear system message is found at the start, prepend ours.
-            # This might alter the original prompt structure more than desired,
-            # but ensures our rules are present.
-            prompt.messages.insert(0, SystemMessage(content=dbatu_persona_and_rules))
-        
-        # Ensure 'tools' and 'tool_names' are in the prompt's input_variables if not already handled by create_react_agent
-        # For hub.pull("hwchase17/react-chat"), these are typically expected.
-        # The create_react_agent function itself should be injecting these based on the `tools` argument.
-        # The error "ValueError: Prompt missing required variables: {'tools', 'tool_names'}" suggests that
-        # the `create_react_agent` is expecting the *prompt itself* to list these in its `input_variables`.
-        # Let's explicitly add them to the prompt's known input variables if they are missing.
-        # This is a bit of a workaround, as `create_react_agent` should ideally manage this.
-
-        expected_vars = {"input", "agent_scratchpad", "chat_history", "tools", "tool_names"}
-        if not expected_vars.issubset(prompt.input_variables):
-            # print(f"Warning: Prompt input_variables {prompt.input_variables} are being updated.")
-            # This is tricky because ChatPromptTemplate.from_messages doesn't directly expose a way to add to input_variables
-            # after construction if they are not found by parsing the template strings.
-            # However, the error implies `create_react_agent` *checks* `prompt.input_variables`.
-            # The original `hwchase17/react-chat` prompt has 'tools' and 'tool_names' in its template strings,
-            # so they should be in `input_variables` after pulling.
-            # The previous custom prompt `ChatPromptTemplate.from_messages` did not have these strings, hence the error.
-            # By using the hub prompt, this issue should be resolved.
-            pass # Relying on the hub prompt to have these.
+            print("Pulled prompt from hub is not a ChatPromptTemplate with messages, or messages list is empty.")
 
     except Exception as e:
-        print(f"Error pulling or customizing chat prompt from hub, using a basic fallback. Error: {e}")
-        # Fallback if hub.pull fails or if the prompt structure is not as expected
+        print(f"Error during hub.pull or initial prompt customization: {e}. Will use basic fallback.")
+        # This exception means hub.pull failed or the pulled object was not structured as expected for direct customization.
+
+    if customization_successful and prompt_from_hub:
+        prompt = prompt_from_hub
+    else:
+        print("Using basic fallback prompt template.")
+        # Fallback if hub.pull fails, returns unexpected type, or customization fails
         # This fallback MUST include {tools} and {tool_names} in the template string itself.
-        template = dbatu_persona_and_rules + """
+        fallback_template = dbatu_persona_and_rules + """
 
 You have access to the following tools:
 {tools}
@@ -213,10 +204,7 @@ Previous conversation:
 New human question: {input}
 Begin!
 {agent_scratchpad}"""
-        prompt = PromptTemplate.from_template(template)
-        # Manually ensure input_variables are what create_react_agent expects
-        # prompt.input_variables are automatically inferred by from_template
-        # So, this list should now include "tools" and "tool_names".
+        prompt = PromptTemplate.from_template(fallback_template)
 
     agent = create_react_agent(llm, tools, prompt)
 
