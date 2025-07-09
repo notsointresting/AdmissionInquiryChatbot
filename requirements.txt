@@ -9,3 +9,4 @@ langchain_google_genai
 langchain_community
 requests
 gunicorn
+langchain-google-community
