@@ -22,9 +22,20 @@ os.environ['GOOGLE_API_KEY'] = os.getenv('API_KEY')
 genai.configure(api_key=os.getenv("API_KEY"))
 
 def create_vector_db():
-    # Load the PDF documents
-    loader = DirectoryLoader(DATA_PATH, glob='*.pdf', loader_cls=PyPDFLoader)
+    # Load the PDF documents from 'data/' and all its subdirectories
+    print(f"Loading documents from: {DATA_PATH} and its subdirectories")
+    loader = DirectoryLoader(
+        DATA_PATH, 
+        glob="**/*.pdf", 
+        loader_cls=PyPDFLoader, 
+        recursive=True, 
+        show_progress=True, # Show a progress bar while loading
+        use_multithreading=True # Use multiple threads to load files faster
+    )
     documents = loader.load()
+    if not documents:
+        print("No PDF documents found. Exiting.")
+        return
     print(f"Number of documents loaded: {len(documents)}")
 
     # Split the text into chunks
@@ -64,7 +75,11 @@ def create_vector_db():
                 # Add the embeddings to the existing FAISS vector store
                 db.add_texts(batch_content, metadatas=metadatas)
             print(f"Successfully processed batch {i // batch_size + 1}")
-            time.sleep(60)  # Delay for 1 minute after processing each batch
+            # Reduced sleep time, but still respectful of potential rate limits
+            # Google's default is often 60 requests per minute for embeddings.
+            # If batch_size is 50, one call per batch. This sleep might be conservative.
+            print("Sleeping for 10 seconds before next batch...")
+            time.sleep(10) 
         except Exception as e:
             print(f"Error processing batch {i // batch_size + 1}: {e}")
             raise

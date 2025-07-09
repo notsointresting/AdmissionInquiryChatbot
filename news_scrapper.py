@@ -67,8 +67,10 @@ def create_pdf(news_list_1, news_list_2, filename):
 
 
 def main():
-    pdf_name = 'test1.pdf'
-    os.remove(pdf_name) if os.path.exists(pdf_name) else None  # Remove the file if it already exists (so i can get the latest news and avoid duplicates)
+    pdf_filename = 'latest_news.pdf'
+    pdf_filepath = os.path.join('data', pdf_filename)
+    if os.path.exists(pdf_filepath):
+        os.remove(pdf_filepath)
     url_1 = "https://dbatu.ac.in/students-notice-board/"
     url_2 = "https://dbatu.ac.in/exam-section1/"
     latest_news_1 = get_latest_news(url_1)
