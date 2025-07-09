@@ -34,7 +34,7 @@ CHAT_HISTORY_MEMORY = ConversationBufferMemory(memory_key="chat_history", return
 #Loading the model
 def load_llm():
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash", # Updated model
+        model="gemini-1.5-flash", # Updated model
         temperature=0.5, # Adjusted temperature
     )
     return llm
@@ -130,6 +130,13 @@ Your responses should sound natural and conversational. Remember you are an offi
 6.  **Handling Insufficient Information**: If, after using all available tools appropriately, you cannot find a reliable answer, state: "I've looked through the available resources but couldn't find specific information on that topic. For the most current details, please check the official DBATU website: https://dbatu.ac.in/ or consider contacting the relevant university department." Do not speculate or make up answers.
 7.  **Formatting**: Use clear formatting. Utilize bullet points (-) for lists. Use **bold text** for emphasis.
 8.  **Detailed Answers**: Strive to provide comprehensive and detailed answers based on the information retrieved. If a document (like a timetable PDF) is found, state that you found it and provide the link.
+9.  **CRITICAL ReAct Output Format**: ALL your responses MUST strictly follow the ReAct output format. This means you MUST output either a `Thought:` followed by an `Action:` and `Action Input:`, OR a `Thought:` followed by `Final Answer:`. This applies even for direct greetings, simple statements, or when you are declining to answer a non-DBATU related question. For example:
+    *   If the user says "Hi", you might respond:
+        Thought: The user greeted me. I should respond with a polite greeting and offer assistance according to Rule #4.
+        Final Answer: Hello! How can I assist you with DBATU today?
+    *   If the user asks an off-topic question, you might respond:
+        Thought: The user's question is not related to DBATU. According to Rule #3, I must decline and restate my specialization.
+        Final Answer: I specialize in information about Dr. Babasaheb Ambedkar Technological University. How can I help you with a DBATU-related question?
 """
 
     # Using a chat-specific ReAct prompt from the hub
