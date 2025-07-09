@@ -32,7 +32,7 @@ DB_FAISS_PATH = 'vectorstore/db_faiss'
 #Loading the model
 def load_llm():
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash-lite", 
+        model="gemini-2.0-flash", 
         temperature=0.6,
     )
     return llm
