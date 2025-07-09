@@ -1,7 +1,7 @@
 # Importing libs and modules
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
-import google.generativeai as genai
+
 from langchain_community.vectorstores import FAISS
 from langchain_community.utilities import SerpAPIWrapper # Changed from GoogleSearchAPIWrapper
 from langchain.agents import Tool, AgentExecutor, create_react_agent
@@ -23,7 +23,7 @@ if not SERPER_API_KEY:
     # For an agent that's expected to search, it's better to make it clear if it's missing.
     print("Warning: SERPER_API_KEY not found in environment variables. Web search tool will not be available.")
 
-genai.configure(api_key=GOOGLE_API_KEY)
+
 
 
 # Path of vector database

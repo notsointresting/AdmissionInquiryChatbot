@@ -1,4 +1,6 @@
 google-generativeai
+langchain-google-genai
+google-genai
 python-dotenv
 langchain
 Flask
