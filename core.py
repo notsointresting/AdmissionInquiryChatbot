@@ -136,44 +136,80 @@ Your responses should sound natural and conversational. Remember you are an offi
     # Ensure this prompt supports 'chat_history'
     # The hwchase17/react-chat prompt includes `chat_history` in its input_variables
     try:
-        # Using a prompt that is designed for chat and ReAct agents
-        prompt = hub.pull("hwchase17/react-chat") # This prompt expects 'chat_history'
-        # We can customize the system message part of this pulled prompt
-        # The react-chat prompt usually has a structure where you can inject a system message
-        # For example, by modifying prompt.messages[0] if it's a SystemMessagePromptTemplate
-        # Or by adding a new SystemMessage if the structure allows.
-        # For simplicity here, we'll prepend the persona to the main template,
-        # but a more robust way is to modify the prompt's message structure.
-        # Let's inspect the pulled prompt's messages to see how to best inject the system message.
-        # For now, we will create a new ChatPromptTemplate that includes our system message
-        # and the existing messages from the hub's prompt.
+        # Pull the base react-chat prompt from the hub
+        prompt = hub.pull("hwchase17/react-chat")
 
-        # Create a new ChatPromptTemplate with our system message and placeholders for history and input
-        # The 'react-chat' prompt typically has system, human, ai, and tool messages.
-        # We will define our own structure incorporating the persona and rules.
-        # A common structure for ReAct agents with chat history:
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                SystemMessage(content=dbatu_persona_and_rules),
-                MessagesPlaceholder(variable_name="chat_history"), # For Langchain's memory
-                ("human", "{input}"),
-                MessagesPlaceholder(variable_name="agent_scratchpad"), # For ReAct agent's thoughts and tool usage
-            ]
-        )
+        # Customize the system message part of the pulled prompt
+        # The first message in this specific hub prompt is usually the system message.
+        # We are replacing its content with our detailed persona and rules.
+        # It's important to ensure that the prompt message list is mutable or to reconstruct it if not.
+        # Most hub prompts are instances of ChatPromptTemplate and their .messages list can be modified.
+
+        if prompt.messages and isinstance(prompt.messages[0], SystemMessage):
+            # If the first message is already a SystemMessage, update its content
+            prompt.messages[0] = SystemMessage(content=dbatu_persona_and_rules)
+        elif prompt.messages and hasattr(prompt.messages[0], 'prompt') and hasattr(prompt.messages[0].prompt, 'template') and "system" in prompt.messages[0].prompt.template.lower():
+             # Some prompts might have a SystemMessagePromptTemplate, try to update its template
+             # This part is a bit more heuristic, ideally, one would inspect the exact structure of "hwchase17/react-chat"
+             # For "hwchase17/react-chat", prompt.messages[0] is a SystemMessagePromptTemplate.
+             # We need to create a new SystemMessage with our content or replace the template string.
+             # The most straightforward way is to replace the SystemMessagePromptTemplate with a new SystemMessage.
+             prompt.messages[0] = SystemMessage(content=dbatu_persona_and_rules)
+        else:
+            # If no clear system message is found at the start, prepend ours.
+            # This might alter the original prompt structure more than desired,
+            # but ensures our rules are present.
+            prompt.messages.insert(0, SystemMessage(content=dbatu_persona_and_rules))
+        
+        # Ensure 'tools' and 'tool_names' are in the prompt's input_variables if not already handled by create_react_agent
+        # For hub.pull("hwchase17/react-chat"), these are typically expected.
+        # The create_react_agent function itself should be injecting these based on the `tools` argument.
+        # The error "ValueError: Prompt missing required variables: {'tools', 'tool_names'}" suggests that
+        # the `create_react_agent` is expecting the *prompt itself* to list these in its `input_variables`.
+        # Let's explicitly add them to the prompt's known input variables if they are missing.
+        # This is a bit of a workaround, as `create_react_agent` should ideally manage this.
+
+        expected_vars = {"input", "agent_scratchpad", "chat_history", "tools", "tool_names"}
+        if not expected_vars.issubset(prompt.input_variables):
+            # print(f"Warning: Prompt input_variables {prompt.input_variables} are being updated.")
+            # This is tricky because ChatPromptTemplate.from_messages doesn't directly expose a way to add to input_variables
+            # after construction if they are not found by parsing the template strings.
+            # However, the error implies `create_react_agent` *checks* `prompt.input_variables`.
+            # The original `hwchase17/react-chat` prompt has 'tools' and 'tool_names' in its template strings,
+            # so they should be in `input_variables` after pulling.
+            # The previous custom prompt `ChatPromptTemplate.from_messages` did not have these strings, hence the error.
+            # By using the hub prompt, this issue should be resolved.
+            pass # Relying on the hub prompt to have these.
+
     except Exception as e:
         print(f"Error pulling or customizing chat prompt from hub, using a basic fallback. Error: {e}")
         # Fallback if hub.pull fails or if the prompt structure is not as expected
+        # This fallback MUST include {tools} and {tool_names} in the template string itself.
         template = dbatu_persona_and_rules + """
-        Previous conversation:
-        {chat_history}
 
-        New human question: {input}
-        Begin!
-        {agent_scratchpad}"""
+You have access to the following tools:
+{tools}
+
+Use the following format:
+
+Question: the input question you must answer
+Thought: you should always think about what to do
+Action: the action to take, should be one of [{tool_names}]
+Action Input: the input to the action
+Observation: the result of the action
+... (this Thought/Action/Action Input/Observation can repeat N times)
+Thought: I now know the final answer.
+
+Previous conversation:
+{chat_history}
+
+New human question: {input}
+Begin!
+{agent_scratchpad}"""
         prompt = PromptTemplate.from_template(template)
         # Manually ensure input_variables are what create_react_agent expects
-        prompt.input_variables = ["input", "tools", "tool_names", "agent_scratchpad", "chat_history"]
-
+        # prompt.input_variables are automatically inferred by from_template
+        # So, this list should now include "tools" and "tool_names".
 
     agent = create_react_agent(llm, tools, prompt)
 
