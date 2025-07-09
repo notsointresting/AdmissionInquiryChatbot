@@ -34,7 +34,7 @@ CHAT_HISTORY_MEMORY = ConversationBufferMemory(memory_key="chat_history", return
 #Loading the model
 def load_llm():
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash-lite", # Updated model
+        model="gemini-2.0-flash-lite", # Changed model to gemini-2.0-flash-lite
         temperature=0.5, # Adjusted temperature
     )
     return llm
@@ -214,8 +214,8 @@ Begin!
         memory=CHAT_HISTORY_MEMORY, # Pass the global memory object here
         verbose=True,
         handle_parsing_errors="Check your output and make sure it conforms, use the Action/Action Input syntax. If you think you have the final answer, make sure to output 'Final Answer:'.", # More descriptive error
-        max_iterations=10,
-        early_stopping_method="generate"
+        max_iterations=10
+        # early_stopping_method="generate" # Removed as it's causing an error and may not be needed
     )
 
     return agent_executor
