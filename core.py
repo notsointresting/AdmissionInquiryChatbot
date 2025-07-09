@@ -16,6 +16,7 @@ load_dotenv()
 GOOGLE_API_KEY = os.getenv('API_KEY') 
 SERPER_API_KEY = os.getenv('SERPER_API_KEY') # New key for Serper
 
+
 if not GOOGLE_API_KEY:
     raise ValueError("API_KEY (for Google Generative AI) not found in environment variables.")
 if not SERPER_API_KEY:
@@ -23,7 +24,8 @@ if not SERPER_API_KEY:
     # For an agent that's expected to search, it's better to make it clear if it's missing.
     print("Warning: SERPER_API_KEY not found in environment variables. Web search tool will not be available.")
 
-
+os.environ['GOOGLE_API_KEY'] = GOOGLE_API_KEY
+os.environ['SERPER_API_KEY'] = SERPER_API_KEY
 
 
 # Path of vector database
