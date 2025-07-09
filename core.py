@@ -34,7 +34,7 @@ CHAT_HISTORY_MEMORY = ConversationBufferMemory(memory_key="chat_history", return
 #Loading the model
 def load_llm():
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash", # Updated model
+        model="gemini-2.0-flash", # Updated model
         temperature=0.5, # Adjusted temperature
     )
     return llm
