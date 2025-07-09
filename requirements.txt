@@ -9,6 +9,7 @@ pypdf
 faiss-cpu
 langchain_google_genai
 langchain_community
+langchain-community
 requests
 gunicorn
 langchain-google-community

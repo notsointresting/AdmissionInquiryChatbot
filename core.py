@@ -1,9 +1,10 @@
 # Importing libs and modules
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from langchain_community.vectorstores import FAISS
-from langchain_community.utilities import SerpAPIWrapper # Changed from GoogleSearchAPIWrapper
+from langchain_community.utilities import GoogleSerperAPIWrapper
 from langchain.agents import Tool, AgentExecutor, create_react_agent
 from langchain_core.prompts import PromptTemplate 
 from langchain import hub 
@@ -85,7 +86,7 @@ def create_dbatu_agent_executor():
     serper_search_tool = None
     if SERPER_API_KEY:
         try:
-            search_wrapper = SerpAPIWrapper(serpapi_api_key=SERPER_API_KEY)
+            search_wrapper = GoogleSerperAPIWrapper(serpapi_api_key=SERPER_API_KEY)
             serper_search_tool = Tool(
                 name="WebSearch", # Generic name for web search
                 func=search_wrapper.run,
