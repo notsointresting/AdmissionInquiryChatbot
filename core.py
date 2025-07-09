@@ -1,17 +1,14 @@
-# Importing libs and modules
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.vectorstores import FAISS
 from langchain_community.utilities import GoogleSerperAPIWrapper
 from langchain.agents import Tool, AgentExecutor, create_react_agent
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder
-from langchain.memory import ConversationBufferMemory # Added for chat history
-from langchain_core.messages import SystemMessage # Added for system message in prompt
+from langchain.memory import ConversationBufferMemory
+from langchain_core.messages import SystemMessage
 from langchain import hub
 import os
 from dotenv import load_dotenv
-
-# Setting API Keys
 load_dotenv()
 GOOGLE_API_KEY = os.getenv('API_KEY')
 SERPER_API_KEY = os.getenv('SERPER_API_KEY')
@@ -24,32 +21,24 @@ if not SERPER_API_KEY:
 os.environ['GOOGLE_API_KEY'] = GOOGLE_API_KEY
 os.environ['SERPER_API_KEY'] = SERPER_API_KEY
 
-# Path of vector database
 DB_FAISS_PATH = 'vectorstore/db_faiss'
 
-# Global variable for chat history (simple approach for script-based execution)
-# For a web app, this should be session-based.
 CHAT_HISTORY_MEMORY = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
 
-#Loading the model
 def load_llm():
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash-lite", # Changed model to gemini-2.0-flash-lite
-        temperature=0.5, # Adjusted temperature
+        model="gemini-2.0-flash-lite",
+        temperature=0.5,
     )
     return llm
 
-# This function will now create and return an AgentExecutor
-def create_dbatu_agent_executor(): # Removed memory argument, will use global
+def create_dbatu_agent_executor():
     llm = load_llm()
 
-    # 1. Tool for searching DBATU's own documents (Vector DB)
     embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
     if not os.path.exists(DB_FAISS_PATH):
         print(f"CRITICAL ERROR: FAISS database not found at {DB_FAISS_PATH}. DBATUDocumentSearch tool cannot function.")
-        # Return a non-functional agent or raise error, as this tool is critical
-        # For now, we'll let it proceed, but this should be handled more gracefully
-        db = None # Indicate DB is not available
+        db = None
     else:
         try:
             db = FAISS.load_local(DB_FAISS_PATH, embeddings, allow_dangerous_deserialization=True)
@@ -82,7 +71,6 @@ def create_dbatu_agent_executor(): # Removed memory argument, will use global
         description="Searches Dr. Babasaheb Ambedkar Technological University's (DBATU) internal knowledge base for specific information. Use this for questions about university policies, course details, admission criteria, internal circulars, etc. This should be your primary tool for DBATU-specific queries."
     )
 
-    # 2. Tool for Serper Web Search
     serper_search_tool = None
     if SERPER_API_KEY:
         try:
@@ -103,10 +91,7 @@ def create_dbatu_agent_executor(): # Removed memory argument, will use global
 
     if not tools:
         print("CRITICAL: No tools available for the agent.")
-        # This scenario should be handled by returning a message to the user
-        # or raising an exception that `user_input` can catch.
 
-    # Enhanced Persona and Rules
     dbatu_persona_and_rules = """
 **Your Role and Persona:**
 You are a helpful, polite, and knowledgeable AI assistant representing Dr. Babasaheb Ambedkar Technological University (DBATU).
@@ -139,50 +124,29 @@ Your responses should sound natural and conversational. Remember you are an offi
         Final Answer: I specialize in information about Dr. Babasaheb Ambedkar Technological University. How can I help you with a DBATU-related question?
 """
 
-    # Using a chat-specific ReAct prompt from the hub
-    # Ensure this prompt supports 'chat_history'
-    # The hwchase17/react-chat prompt includes `chat_history` in its input_variables
-    
     prompt_from_hub = None
-    customization_successful = False
+    customization_successful = False        try:
+            pulled_prompt = hub.pull("hwchase17/react-chat")
 
-    try:
-        # Attempt to pull the prompt from the hub
-        pulled_prompt = hub.pull("hwchase17/react-chat")
-
-        # Check if it's a ChatPromptTemplate and has messages to customize
         if isinstance(pulled_prompt, ChatPromptTemplate) and pulled_prompt.messages:
-            # Attempt to customize the system message
-            # Make a copy or ensure modification is safe if the pulled prompt messages list is immutable
-            # For ChatPromptTemplate, .messages is usually a list of BaseMessagePromptTemplate
-            
-            # Simplest approach: replace the first message if it's a system message, otherwise insert.
-            # This assumes the first message is the most likely candidate for system instructions.
             if isinstance(pulled_prompt.messages[0], SystemMessage) or \
-               (hasattr(pulled_prompt.messages[0], 'prompt') and isinstance(pulled_prompt.messages[0].prompt, SystemMessage)): # SystemMessagePromptTemplate
-                # If the first message is SystemMessage or SystemMessagePromptTemplate, replace its content
-                # Creating a new SystemMessage is safer than trying to modify template strings directly
+               (hasattr(pulled_prompt.messages[0], 'prompt') and isinstance(pulled_prompt.messages[0].prompt, SystemMessage)):
                 pulled_prompt.messages[0] = SystemMessage(content=dbatu_persona_and_rules)
             else:
-                # If not, insert our system message at the beginning
                 pulled_prompt.messages.insert(0, SystemMessage(content=dbatu_persona_and_rules))
             
             prompt_from_hub = pulled_prompt
             customization_successful = True
-            # print("Successfully pulled and customized prompt from hub.") # For debugging
         else:
             print("Pulled prompt from hub is not a ChatPromptTemplate with messages, or messages list is empty.")
 
     except Exception as e:
         print(f"Error during hub.pull or initial prompt customization: {e}. Will use basic fallback.")
-        # This exception means hub.pull failed or the pulled object was not structured as expected for direct customization.
 
     if customization_successful and prompt_from_hub:
         prompt = prompt_from_hub
     else:
         print("Using basic fallback prompt template.")
-        # Fallback if hub.pull fails, returns unexpected type, or customization fails
-        # This fallback MUST include {tools} and {tool_names} in the template string itself.
         fallback_template = dbatu_persona_and_rules + """
 
 You have access to the following tools:
@@ -211,17 +175,14 @@ Begin!
     agent_executor = AgentExecutor(
         agent=agent,
         tools=tools,
-        memory=CHAT_HISTORY_MEMORY, # Pass the global memory object here
+        memory=CHAT_HISTORY_MEMORY,
         verbose=True,
-        handle_parsing_errors="Check your output and make sure it conforms, use the Action/Action Input syntax. If you think you have the final answer, make sure to output 'Final Answer:'.", # More descriptive error
+        handle_parsing_errors="Check your output and make sure it conforms, use the Action/Action Input syntax. If you think you have the final answer, make sure to output 'Final Answer:'.",
         max_iterations=10
-        # early_stopping_method="generate" # Removed as it's causing an error and may not be needed
     )
 
     return agent_executor
 
-# Global agent executor instance (to maintain memory across calls in a simple script)
-# This will be initialized once.
 DBATU_AGENT_EXECUTOR = None
 
 def get_agent_executor():
@@ -236,23 +197,16 @@ def user_input(user_question):
         print("CRITICAL WARNING: SERPER_API_KEY is not set. Web search functionality will be severely limited or disabled.")
     if not os.path.exists(DB_FAISS_PATH) or not os.listdir(DB_FAISS_PATH):
         print(f"CRITICAL WARNING: FAISS database at {DB_FAISS_PATH} is missing or empty. DBATUInternalKnowledgeSearch tool will not function correctly. Please run app_embeddings.py.")
-        # Potentially return a message to the user if critical tools are down.
 
-    agent_executor = get_agent_executor() # Get the globally managed agent executor
+    agent_executor = get_agent_executor()
 
     try:
-        # The agent_executor now uses the global CHAT_HISTORY_MEMORY internally
         response = agent_executor.invoke({"input": user_question})
         final_answer = response.get("output", "I am sorry, I could not find an answer to your question.")
-
-        # The memory is automatically updated by the AgentExecutor when configured with one.
-        # No need to manually save user_question and final_answer to CHAT_HISTORY_MEMORY here
-        # if it's correctly passed to and used by the AgentExecutor.
 
         return {"output_text": final_answer, "chat_history": CHAT_HISTORY_MEMORY.chat_memory.messages}
     except Exception as e:
         print(f"Error during agent execution: {e}")
-        # Log the full error for debugging
         import traceback
         traceback.print_exc()
         return {"output_text": "I apologize, but I encountered an unexpected issue while trying to process your request. Please try again later.", "chat_history": CHAT_HISTORY_MEMORY.chat_memory.messages}
@@ -260,36 +214,6 @@ def user_input(user_question):
 # Example usage (for testing purposes, can be removed or commented out)
 if __name__ == '__main__':
     print("DBATU Chatbot Initialized. Type 'quit' to exit.")
-    # print("Initial chat history:", CHAT_HISTORY_MEMORY.chat_memory.messages) # For debugging
-    # # Test 1: Greeting
-    # response = user_input("Hello")
-    # print("Bot:", response["output_text"])
-    # # print("Chat history after greeting:", response["chat_history"]) # For debugging
-
-    # Test 2: DBATU specific question
-    # response = user_input("Tell me about the engineering programs at DBATU.")
-    # print("Bot:", response["output_text"])
-    # # print("Chat history after DBATU question:", response["chat_history"]) # For debugging
-
-    # Test 3: Follow-up question
-    # response = user_input("What are the admission criteria for those programs?")
-    # print("Bot:", response["output_text"])
-    # # print("Chat history after follow-up:", response["chat_history"]) # For debugging
-
-    # Test 4: Unrelated question
-    # response = user_input("What's the weather like today?")
-    # print("Bot:", response["output_text"])
-    # # print("Chat history after unrelated q:", response["chat_history"]) # For debugging
-
-    # Test 5: Request for location
-    # response = user_input("Where is DBATU located? Can you give me a map link?")
-    # print("Bot:", response["output_text"])
-
-    # Test 6: Simulated PDF link request (assuming a tool could find one)
-    # This requires mocking the tool's behavior or having a test document.
-    # For now, we'll just ask a question that *might* lead to a PDF.
-    # response = user_input("Can I get the timetable for the first year computer engineering PDF?")
-    # print("Bot:", response["output_text"])
 
     while True:
         query = input("You: ")
@@ -297,5 +221,3 @@ if __name__ == '__main__':
             break
         response_data = user_input(query)
         print("Bot:", response_data["output_text"])
-        # print("DEBUG Current Chat History:", CHAT_HISTORY_MEMORY.chat_memory.messages)
-        # print("-" * 20)

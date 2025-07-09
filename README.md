@@ -1,302 +1,353 @@
-# Explaination of Codes as Followed
+# Project Documentation: DBATU AI Assistant & Data Pipeline
+
+## 1. Introduction
+
+This project implements an AI-powered chatbot assistant for Dr. Babasaheb Ambedkar Technological University (DBATU). The assistant is designed to answer user queries related to the university by leveraging a knowledge base built from university documents and up-to-date news. The system includes a data pipeline for scraping news, processing images into text, and generating text embeddings to keep the chatbot's knowledge base current. The chatbot is accessible via a Telegram interface.
+
+## 2. System Architecture Overview
+
+The system can be broadly divided into two main parts:
+
+1.  **Data Preparation Pipeline:** This set of scripts is responsible for gathering information from various sources (university website for news, local PDF documents, images containing text), processing this information, and converting it into a searchable vector database (FAISS). This pipeline is designed to be run periodically to ensure the knowledge base is up-to-date.
+    *   `news_scrapper.py`: Fetches latest news/notices from specific DBATU web pages and saves them as PDFs.
+    *   `image_processor.py`: Extracts text from images using OCR (Tesseract) and saves the extracted text as PDFs.
+    *   `app_embeddings.py`: Loads all PDF documents (from news, image processing, and other manually added university documents) from a designated data directory, splits the text, generates embeddings using Google's Generative AI, and stores them in a FAISS vector database.
+    *   `run_daily_data_pipeline.py`: Orchestrates the execution of the above scripts in sequence.
+
+2.  **Chatbot Application & Interface:** This part handles user interaction, query processing, and interfacing with the AI model.
+    *   `core.py`: Contains the core logic for the Langchain ReAct agent, including defining tools (internal knowledge search via FAISS, web search via Serper API), managing chat history, and prompting the Google Generative AI model (`gemini-2.0-flash-lite`).
+    *   `main.py`: A Flask web application that serves as the backend for a Telegram bot. It receives messages from Telegram, passes questions to the chatbot core, and sends the generated answers back to the user via the Telegram API.
+
+The overall workflow involves users interacting with the Telegram bot. Messages are routed through `main.py` to `core.py`, where the Langchain agent decides whether to use its internal knowledge (FAISS vector store created by `app_embeddings.py`) or a web search to answer the query.
+
+### 2.1 The ReAct Framework: Powering the Agent's Decisions
+
+A key component of the chatbot's intelligence in `core.py` is its use of the **ReAct (Reasoning and Acting)** framework. ReAct is a paradigm that enables Large Language Models (LLMs) to solve complex tasks by combining step-by-step reasoning with the ability to take actions (i.e., use tools).
+
+**How ReAct Works:**
+
+Instead of just generating a direct answer, a ReAct agent operates in a loop, iteratively performing the following steps:
+
+1.  **Thought:** The LLM first reasons about the user's query and the current state of the conversation. It decides what information is needed, whether a tool should be used, or if it has enough information to answer.
+2.  **Action:** If the LLM decides a tool is necessary, it specifies which tool to use (e.g., `DBATUInternalKnowledgeSearch` or `WebSearch`).
+3.  **Action Input:** The LLM determines the appropriate input to provide to the chosen tool.
+4.  **Observation:** The system executes the tool with the given input, and the result (output from the tool) is returned to the LLM as an "observation."
+
+This "Thought -> Action -> Action Input -> Observation" cycle can repeat multiple times. The LLM uses the observations from tool executions to refine its reasoning and decide on subsequent steps.
+
+**Concluding the Task:**
+
+Once the LLM believes it has gathered enough information or has completed the necessary steps, it will output:
+
+*   **Thought:** A final thought process summarizing its findings or decision.
+*   **Final Answer:** The actual response to be delivered to the user.
+
+**Importance in This Project:**
+
+*   **Tool Usage:** ReAct allows the agent in `core.py` (created using `create_react_agent`) to dynamically choose between searching its internal FAISS knowledge base or performing a web search, based on the query.
+*   **Structured Reasoning:** It provides a more transparent and controllable way for the LLM to arrive at an answer, as its reasoning steps can be (and are, with `verbose=True`) logged.
+*   **Output Formatting (Rule #9):** The `dbatu_persona_and_rules` (specifically Rule #9: CRITICAL ReAct Output Format) provided to the LLM is vital. It strictly instructs the LLM to adhere to this "Thought, Action, Action Input, Observation, Final Answer" structure. Without this explicit guidance, LLMs might try to answer directly without the structured ReAct format, leading to parsing errors within the Langchain framework, as the `AgentExecutor` expects this specific output.
+
+The ReAct framework, therefore, transforms the LLM from a simple text generator into a more capable agent that can reason about tasks and utilize tools to find and synthesize information effectively.
+
+## 3. System Workflow Diagram (Mermaid.js Prompt)
+
+![Data Pipeline Diagram](assets/diagram.png)
+**Explanation of Diagram Elements:**
+
+*   **Data Preparation Pipeline:** Shows how news and image data are scraped/processed into PDFs, which along with manual PDFs, are fed into `app_embeddings.py` to create/update the FAISS vector store. `run_daily_data_pipeline.py` automates this.
+*   **Chatbot Application:** Illustrates a user interacting via Telegram. The Flask app (`main.py`) receives the message and passes it to the `core.py` agent. The agent uses the LLM, chat history, and tools (which can access the FAISS DB or external Serper API) to generate a response.
+
+## 4. Component Deep Dive
+
+This section provides a detailed explanation of each Python script in the project.
+
+### 4.1 `core.py` - Chatbot Agent Core Logic
+
+*   **File Purpose:** This script is the heart of the AI assistant. It defines and configures the Langchain ReAct agent responsible for understanding user queries, interacting with tools, and generating responses using Google's Generative AI models.
+
+*   **Key Components & Logic:**
+    *   **Environment Variable Setup:** Loads `API_KEY` (for Google Generative AI) and `SERPER_API_KEY` (for web search) from a `.env` file.
+    *   **`CHAT_HISTORY_MEMORY`:** A global `ConversationBufferMemory` instance to store and manage chat history across user interactions within a session. This allows the agent to have contextual conversations.
+    *   **`load_llm()`:** Initializes and returns a `ChatGoogleGenerativeAI` instance, configured with the `gemini-2.0-flash-lite` model and a specific temperature.
+    *   **Tool Definitions:**
+        *   **`search_dbatu_documents(query)` (DBATUInternalKnowledgeSearch Tool):**
+            *   Loads a FAISS vector database from `vectorstore/db_faiss` using `GoogleGenerativeAIEmbeddings`.
+            *   Performs a similarity search (retrieval) on the loaded database based on the user's query.
+            *   Returns the content of relevant documents found.
+            *   Includes error handling for cases where the database is not found or empty.
+        *   **`GoogleSerperAPIWrapper` (WebSearch Tool):**
+            *   If `SERPER_API_KEY` is available, this tool is configured to perform web searches using Google Serper API.
+            *   It's intended as a fallback if the internal knowledge search doesn't suffice for DBATU-related questions.
+    *   **`dbatu_persona_and_rules`:** A long string defining the detailed persona, operational rules, and output formatting guidelines for the AI agent. This is crucial for controlling the agent's behavior, tone, tool usage priority, and response structure (especially the CRITICAL ReAct Output Format rule).
+    *   **`create_dbatu_agent_executor()`:**
+        *   Loads the LLM.
+        *   Initializes the tools (DBATUInternalKnowledgeSearch, WebSearch).
+        *   **Prompt Engineering:**
+            *   Attempts to pull the `"hwchase17/react-chat"` prompt from Langchain Hub.
+            *   Customizes the system message of this pulled prompt with `dbatu_persona_and_rules`.
+            *   Includes robust fallback logic: if pulling or customizing the hub prompt fails, it constructs a `PromptTemplate` from a fallback template string (which also incorporates `dbatu_persona_and_rules` and ReAct formatting instructions).
+        *   Uses `create_react_agent()` to create the agent instance with the LLM, tools, and the configured prompt.
+        *   Wraps the agent in an `AgentExecutor`, providing it with the agent, tools, global chat history memory (`CHAT_HISTORY_MEMORY`), and parameters like `verbose=True`, `handle_parsing_errors`, and `max_iterations`.
+    *   **`DBATU_AGENT_EXECUTOR` & `get_agent_executor()`:** Manages a global instance of the `AgentExecutor` to ensure persistence of memory and state across multiple calls within the same script run (important for `main.py`).
+    *   **`user_input(user_question)`:**
+        *   This is the main entry point for the chatbot logic.
+        *   It retrieves the global `agent_executor`.
+        *   Invokes the agent with the `user_question`. The `AgentExecutor` automatically handles history and tool interactions.
+        *   Returns the agent's final answer and the current chat history.
+        *   Includes error handling for agent execution.
+    *   **Example Usage (`if __name__ == '__main__':`)**: Provides a command-line interface for interactive testing of the chatbot.
+
+*   **Core Libraries Used:**
+    *   `langchain`: For the agent framework (`AgentExecutor`, `create_react_agent`), LLM integration (`ChatGoogleGenerativeAI`), vector store interactions (`FAISS`), document loading/embedding (`GoogleGenerativeAIEmbeddings`), prompt templating (`ChatPromptTemplate`, `PromptTemplate`, `MessagesPlaceholder`), memory (`ConversationBufferMemory`), and tools (`Tool`).
+    *   `langchain_google_genai`: Specific integration for Google's Generative AI models and embeddings.
+    *   `langchain_community`: For community-provided components like `FAISS` vector store and `GoogleSerperAPIWrapper`.
+    *   `dotenv`: For loading environment variables.
+    *   `os`: For path operations.
+
+*   **Interactions:**
+    *   **Input:** Receives user questions via the `user_input` function.
+    *   **Output:** Returns a dictionary containing the chatbot's textual answer and the chat history.
+    *   **External Services:**
+        *   Google Generative AI (for LLM responses and embeddings).
+        *   Google Serper API (for web searches, if enabled).
+    *   **Local Filesystem:**
+        *   Reads API keys from `.env`.
+        *   Loads the FAISS vector database from `vectorstore/db_faiss/`.
+    *   **Called by:** `main.py` to process user requests from Telegram.
+
+### 4.2 `main.py` - Flask Web Server & Telegram Bot Interface
+
+*   **File Purpose:** This script sets up a Flask web application that acts as a webhook for a Telegram bot. It handles incoming messages from Telegram, processes them (text or voice), gets answers from `core.py`, and sends responses back to the Telegram user.
+
+*   **Key Components & Logic:**
+    *   **Flask App Initialization:** Creates a Flask app instance.
+    *   **Environment Variable Loading:** Loads `API_KEY` (for Google GenAI, though `core.py` handles its direct use) and `TELEGRAM_BOT_TOKEN`.
+    *   **`generate_answer(question)`:** A wrapper function that calls `user_input(question)['output_text']` from `core.py` to get the chatbot's answer.
+    *   **`message_parser(message)`:**
+        *   Parses the JSON message received from Telegram.
+        *   Extracts `chat_id` and the content (`text` for text messages, `file_id` for voice messages).
+        *   Identifies the message type ('text' or 'voice').
+        *   Includes basic error handling for `KeyError`.
+    *   **`send_message_telegram(chat_id, text)`:**
+        *   Constructs a request to the Telegram Bot API's `sendMessage` endpoint.
+        *   Sends the chatbot's textual answer back to the specified `chat_id`.
+    *   **`index()` route (`'/'`, methods `GET`, `POST`):**
+        *   This is the main webhook endpoint for Telegram.
+        *   If `POST` request:
+            *   Gets the JSON payload (Telegram message).
+            *   Parses the message using `message_parser`.
+            *   If it's a text message, calls `generate_answer` to get a response from `core.py`.
+            *   If it's a voice message, it currently returns a placeholder "Sorry, I couldn't understand the audio message." (Voice processing is not fully implemented here, though `google.generativeai` is imported, suggesting potential future use).
+            *   Sends the answer back to the user via `send_message_telegram`.
+            *   Returns an 'ok' HTTP 200 response to Telegram.
+        *   If `GET` request: Returns a simple HTML "Something went wrong" message (typically, Telegram uses POST for webhooks).
+    *   **`if __name__ == '__main__':`**: Runs the Flask development server, making it accessible on `0.0.0.0:5000`.
+
+*   **Core Libraries Used:**
+    *   `flask`: For creating the web application and handling HTTP requests.
+    *   `requests`: For making HTTP POST requests to the Telegram Bot API.
+    *   `dotenv`: For loading environment variables.
+    *   `os`: For accessing environment variables.
+    *   `core` (custom module): Imports `user_input` to interact with the chatbot logic.
+    *   `google.generativeai` (imported but not directly used for voice in the provided `index` logic, might be for other planned features).
+
+*   **Interactions:**
+    *   **Input:** Receives HTTP POST requests from the Telegram API whenever a user sends a message to the bot.
+    *   **Output:** Sends HTTP POST requests to the Telegram API to deliver the chatbot's responses to the user. Returns HTTP 200 to Telegram to acknowledge message receipt.
+    *   **External Services:**
+        *   Telegram Bot API (for receiving messages and sending replies).
+    *   **Internal Modules:**
+        *   Calls `core.user_input()` to get chatbot responses.
+    *   **Environment:** Reads `TELEGRAM_BOT_TOKEN` and `API_KEY`.
+
+### 4.3 `news_scrapper.py` - News Fetching and PDF Creation
+
+*   **File Purpose:** This script is responsible for scraping the latest news and notices from specified DBATU website URLs and compiling this information into a PDF document.
+
+*   **Key Components & Logic:**
+    *   **`get_latest_news(url)`:**
+        *   Takes a URL as input.
+        *   Uses the `requests` library to fetch the HTML content of the page.
+        *   Parses the HTML using `BeautifulSoup`.
+        *   Finds news articles by looking for `<article>` tags with specific CSS classes (`exad-post-grid-three exad-col`).
+        *   For each of the first 5 articles found, it extracts the title, link, and date.
+        *   Returns a list of dictionaries, where each dictionary represents a news item.
+    *   **`create_pdf(news_list_1, news_list_2, filename)`:**
+        *   Takes two lists of news items (presumably from two different URLs) and an output filename.
+        *   Uses the `FPDF` library (from `fpdf2`) to create a new PDF document.
+        *   Adds a title for each news list section.
+        *   Iterates through each news item in both lists and writes the title, link, and date to the PDF.
+        *   Saves the generated PDF to the `data/` directory.
+    *   **`main()` function:**
+        *   Defines two DBATU URLs: one for the "Students Notice Board" and one for the "Exam Section."
+        *   Specifies the output PDF filename (`latest_news.pdf`).
+        *   Checks if an old `latest_news.pdf` exists in `data/` and removes it to ensure a fresh file.
+        *   Calls `get_latest_news()` for both URLs to fetch news.
+        *   Calls `create_pdf()` to combine the fetched news into `data/latest_news.pdf`.
+
+*   **Core Libraries Used:**
+    *   `requests`: For making HTTP requests to fetch web page content.
+    *   `beautifulsoup4` (`bs4`): For parsing HTML content and extracting data.
+    *   `fpdf` (`FPDF` from `fpdf2`): For creating and writing PDF documents.
+    *   `os`: For path operations (joining paths, checking file existence, removing files).
+
+*   **Interactions:**
+    *   **Input:** Reads from predefined DBATU website URLs.
+    *   **Output:** Creates a PDF file (`latest_news.pdf`) in the `data/` directory containing the scraped news.
+    *   **External Services:** Accesses `dbatu.ac.in` website.
+    *   **Called by:** `app_embeddings.py` (imports and calls `main()` from `news_scrapper`) and `run_daily_data_pipeline.py`.
+
+### 4.4 `image_processor.py` - OCR Text Extraction from Images
+
+*   **File Purpose:** This script extracts textual content from images using Tesseract OCR and saves the extracted text into individual PDF files.
+
+*   **Key Components & Logic:**
+    *   **Tesseract Configuration Note:** Includes comments on how to specify the Tesseract command path if it's not in the system PATH.
+    *   **`extract_text_from_image(image_path)`:**
+        *   Takes the path to an image file.
+        *   Uses `pytesseract.image_to_string(Image.open(image_path))` to perform OCR.
+        *   Includes error handling for `FileNotFoundError`, `pytesseract.TesseractNotFoundError` (critical), and other general exceptions during OCR.
+    *   **`create_pdf_from_text(text_content, original_image_filename, output_pdf_path)`:**
+        *   Takes the extracted text, the original image filename (for titling), and the desired output PDF path.
+        *   Uses `FPDF` to create a PDF.
+        *   Defaults to Arial font. Comments suggest an attempt to use DejaVu for better Unicode, but it's commented out.
+        *   Encodes text to `latin-1` with replacements as a workaround for FPDF errors with unsupported characters if a non-Unicode font (like default Arial) is active. This can lead to loss of special characters.
+        *   Writes the extracted text to the PDF.
+        *   Saves the PDF to the specified `output_pdf_path`.
+    *   **`process_images_in_directory(input_dir, output_dir)`:**
+        *   Iterates through all files in the `input_dir` (default: `data/images_to_process`).
+        *   Checks for supported image formats.
+        *   For each supported image, calls `extract_text_from_image()` and then `create_pdf_from_text()`.
+        *   Prints status messages and a summary.
+    *   **`if __name__ == '__main__':` block:**
+        *   Provides example usage and creates a dummy input directory if needed.
+        *   Calls `process_images_in_directory()` with error handling for `TesseractNotFoundError`.
+
+*   **Core Libraries Used:**
+    *   `pytesseract`: Python wrapper for Tesseract OCR engine.
+    *   `Pillow` (`PIL`): Used for opening and manipulating image files.
+    *   `fpdf` (`FPDF` from `fpdf2`): For creating PDF documents from the extracted text.
+    *   `os`: For directory and path manipulations.
+
+*   **Interactions:**
+    *   **Input:** Reads image files from `data/images_to_process/`.
+    *   **Output:** Creates PDF files containing extracted text in `data/processed_image_pdfs/`.
+    *   **External Dependencies:** Requires Tesseract OCR to be installed and accessible.
+    *   **Called by:** `run_daily_data_pipeline.py`.
+
+### 4.5 `app_embeddings.py` - Vector Database Creation
+
+*   **File Purpose:** This script builds the knowledge base for the chatbot. It loads PDF documents, splits their text, generates text embeddings using Google Generative AI, and stores these in a FAISS vector database.
+
+*   **Key Components & Logic:**
+    *   **Initial News Scraping:** Imports and calls `main()` from `news_scrapper` to ensure `latest_news.pdf` is current.
+    *   **Path Definitions:** `DATA_PATH` (default: `data/`) for input documents, `DB_FAISS_PATH` (default: `vectorstore/db_faiss`) for the vector store.
+    *   **API Key Setup:** Loads and configures `GOOGLE_API_KEY`.
+    *   **`create_vector_db()`:**
+        *   **Document Loading:** Uses `DirectoryLoader` with `PyPDFLoader` to recursively load all PDFs from `DATA_PATH`.
+        *   **Text Splitting:** Uses `RecursiveCharacterTextSplitter` (chunk size 512, overlap 64).
+        *   **Embedding Model:** Initializes `GoogleGenerativeAIEmbeddings` (`"models/text-embedding-004"`).
+        *   **Batch Processing & FAISS Storage:**
+            *   Processes texts in batches (size 50).
+            *   Embeds content using `embeddings.embed_documents()`.
+            *   Creates a new FAISS store with `FAISS.from_texts()` for the first batch.
+            *   Adds subsequent batches to the existing store using `db.add_texts()`.
+            *   Includes `time.sleep(10)` between batches (likely for API rate limits).
+        *   **Saving Database:** Saves the FAISS index locally via `db.save_local(DB_FAISS_PATH)`.
+    *   **`if __name__ == "__main__":`**: Calls `create_vector_db()`.
+
+*   **Core Libraries Used:**
+    *   `langchain`: For text splitting, document loading, vector store operations, embedding models.
+    *   `langchain_google_genai`: For Google Generative AI embeddings.
+    *   `langchain_community`: For `FAISS` and `DirectoryLoader`.
+    *   `google-generativeai` (`genai`): For API key configuration.
+    *   `dotenv`: For environment variables.
+    *   `os`: For path operations.
+    *   `time`: For `time.sleep()`.
+    *   `news_scrapper` (custom module): To run news scraping.
+
+*   **Interactions:**
+    *   **Input:**
+        *   Reads PDFs from `DATA_PATH` (including those from `news_scrapper`, `image_processor`, and manual additions).
+        *   Reads `GOOGLE_API_KEY`.
+    *   **Output:** Creates/updates FAISS vector database at `DB_FAISS_PATH`.
+    *   **External Services:** Google Generative AI (for text embeddings).
+    *   **Internal Modules:** Calls `main()` from `news_scrapper.py`.
+    *   **Called by:** `run_daily_data_pipeline.py`, or manually.
+
+### 4.6 `run_daily_data_pipeline.py` - Pipeline Orchestration
+
+*   **File Purpose:** Orchestrates the execution of `news_scrapper.py`, `image_processor.py`, and `app_embeddings.py` in sequence to update the data pipeline.
+
+*   **Key Components & Logic:**
+    *   **`run_script(script_name)`:**
+        *   Helper function to execute Python scripts using `subprocess.Popen`.
+        *   Captures and prints `stdout`/`stderr` in real-time.
+        *   Reports success or failure of each script.
+    *   **`main()` function:**
+        *   **Pre-run Checks:** Notes Tesseract dependency for `image_processor.py` and creates `data/images_to_process` directory if absent.
+        *   **Execution Steps:**
+            1.  Runs `news_scrapper.py`.
+            2.  Runs `image_processor.py`.
+            3.  Runs `app_embeddings.py`.
+        *   Logs warnings for non-critical failures but emphasizes failure in embedding generation as critical.
+        *   Suggests automation via cron or Task Scheduler.
+    *   **`if __name__ == "__main__":`**: Calls `main()`.
+
+*   **Core Libraries Used:**
+    *   `subprocess`: For running other scripts.
+    *   `sys`: For `sys.executable`.
+    *   `os`: For path manipulations.
+    *   `datetime`: For timestamping logs.
+
+*   **Interactions:**
+    *   **Output:** Console logs detailing pipeline progress.
+    *   **Internal Modules:** Executes `news_scrapper.py`, `image_processor.py`, `app_embeddings.py`.
+    *   **Called by:** Manually or by a scheduler.
+
+## 5. Data Pipeline Summary
+
+The project includes a data pipeline orchestrated by `run_daily_data_pipeline.py`:
+
+1.  **News Scraping (`news_scrapper.py`):** Fetches latest news from DBATU website URLs and saves as `data/latest_news.pdf`.
+2.  **Image Processing (`image_processor.py`):** Extracts text from images in `data/images_to_process/` using Tesseract OCR, saving results as PDFs in `data/processed_image_pdfs/`.
+3.  **Embedding Generation (`app_embeddings.py`):**
+    *   Ensures `news_scrapper.py` has run.
+    *   Loads all PDFs from `data/` (news, image text, manual documents).
+    *   Splits text, generates embeddings (Google's text-embedding-004), and stores/updates the FAISS vector database at `vectorstore/db_faiss`.
+
+This pipeline refreshes the chatbot's knowledge base and is designed for periodic execution.
+
+## 6. Setup & Running the Application
+
+1.  **Prerequisites:**
+    *   Python 3.x.
+    *   Tesseract OCR installed and in system PATH.
+    *   Telegram Bot token.
+2.  **Installation:**
+    *   Clone repository.
+    *   Install Python libraries (e.g., via `pip install -r requirements.txt` - assuming `requirements.txt` with `langchain`, `langchain-google-genai`, `langchain-community`, `flask`, `requests`, `python-dotenv`, `beautifulsoup4`, `fpdf2`, `pytesseract`, `Pillow`, `faiss-cpu`).
+3.  **Environment Variables (`.env` file):**
+    ```
+    API_KEY="YOUR_GOOGLE_GENERATIVE_AI_API_KEY"
+    SERPER_API_KEY="YOUR_GOOGLE_SERPER_API_KEY" 
+    TELEGRAM_BOT_TOKEN="YOUR_TELEGRAM_BOT_TOKEN"
+    ```
+4.  **Initial Data Preparation:**
+    *   Place university PDFs in `data/`.
+    *   Place images for OCR in `data/images_to_process/`.
+    *   Run `python app_embeddings.py` or `python run_daily_data_pipeline.py` once.
+5.  **Running Chatbot (Flask Server for Telegram):**
+    *   Run `python main.py`.
+    *   Configure Telegram bot webhook to your server's public URL.
+6.  **Running Data Pipeline Periodically:**
+    *   Schedule `python run_daily_data_pipeline.py` (e.g., via cron).
+
+## 7. Key Environment Variables
+
+*   `API_KEY`: Google Generative AI API key (for LLM & embeddings). Used by `core.py`, `app_embeddings.py`.
+*   `SERPER_API_KEY`: Google Serper API key (for web search). Used by `core.py`.
+*   `TELEGRAM_BOT_TOKEN`: Telegram bot token. Used by `main.py`.
+*   `DB_FAISS_PATH`: (Optional) Path to FAISS vector store. Default: `vectorstore/db_faiss`. Used by `core.py`, `app_embeddings.py`.
 ---
-
-## Table of Contents
-
-1. [news_scrapper.py](#news_scrapperpy)
-2. [app_embeddings.py](#app_embeddingspy)
-3. [main.py](#mainpy)
-4. [app.py](#apppy)
-
-
-
-
-### news_scrapper.py
-The Code is responsible for gathering latest up to date information from the university's website.
-
-## Key Concepts
-To understand the code, let's go over some key concepts:
-
-- **Web Scraping**: The process of extracting data from websites. In this code, we use the requests library to send HTTP requests to the specified URLs and retrieve the HTML content of the web pages. We then use the BeautifulSoup library to parse the HTML and extract the desired information.
-
-- **PDF Generation**: The process of creating a PDF file programmatically. In this code, we use the FPDF library, which provides a simple interface for creating PDF documents. We can add text, images, and other elements to the PDF using the library's methods.
-
-- **File Handling**: The process of manipulating files on the computer. In this code, we use the os module to check if a PDF file with the specified name already exists and remove it if necessary. We also use the os.path module to construct the file path for the PDF.
-
-## Code Structure
-The code is structured into three main parts:
-
-1. The `get_latest_news` function fetches the latest news articles from a given URL. It uses the requests library to send an HTTP GET request to the URL and retrieve the HTML content of the web page. It then uses the **BeautifulSoup** library to parse the HTML and extract the news title, link, and date for each article. The function returns a list of dictionaries, where each dictionary represents a news article and contains the title, link, and date.
-
-2. The `create_pdf` function generates a PDF file containing the latest news from both URLs. It uses the **FPDF** library to create a new PDF document and adds the news details **(title, link, date)** to the PDF, organized by source. The function takes two lists of news articles (one for each URL) and a filename as input.
-
-3. The main function orchestrates the process. It first removes any existing PDF file with the specified name to avoid duplicates. It then fetches the latest news from both URLs using the `get_latest_news` function. Finally, it calls the `create_pdf` function to create a new PDF file named **'latest_news.pdf'** with the compiled news information.
-
-You Can check the format of feteched news by going into [this.](data/latest_news.pdf)
-
-
-### app_embeddings.py
-
-This code performs the task of creating vector embeddings for text content in PDF documents. Vector embeddings are numerical representations of text that capture its semantic meaning. These embeddings enable efficient similarity searches and other natural language processing (NLP) tasks.
-
-## Key Concepts
-Before diving into the code, let's understand some key concepts:
-
-- **Vector Embeddings**: Vector embeddings are numerical representations of text that capture its semantic meaning. These embeddings are generated using machine learning models trained on large amounts of text data.
-
-- **PDF Documents**: PDF (Portable Document Format) is a file format used for representing documents in a manner independent of the software, hardware, and operating system. PDF documents can contain text, images, and other elements.
-
-- **FAISS**: FAISS (Facebook AI Similarity Search) is a library for efficient similarity search and clustering of dense vectors. It provides a fast and memory-efficient solution for indexing and searching vector embeddings.
-
-- **Google Generative AI**: Google Generative AI is a suite of machine learning models developed by Google. These models can be used for various NLP tasks, including text embedding generation.
-
-## Code Structure
-The code is structured as follows:
-
-1. Fetch Latest News: The code calls the main() function from the `news_scrapper` module to fetch the latest news and generate a PDF file.
-
-2. Load Environment Variables: The code uses the dotenv library to load the **Google API** key from the environment variables.
-
-3. Load PDF Documents: The code reads all PDF documents from the specified directory (data/) using the **DirectoryLoader** and **PyPDFLoader** classes.
-
-4. Split Text into Chunks: The code uses the **RecursiveCharacterTextSplitter** class to split the text content of the PDF documents into smaller chunks. This is done to process the text in batches and avoid memory limitations.
-
-5. Generate Text Embeddings: The code uses Google's Generative AI to generate vector embeddings for the text chunks. The **GoogleGenerativeAIEmbeddings** class is used for this purpose.
-
-6. Batch Processing: The code processes the text chunks in batches. It embeds the text chunks using the Google Generative AI model and adds them incrementally to a **FAISS vector store**. A delay of 1 minute is added after processing each batch to avoid rate limits.
-
-7. Save Vector Store: The code saves the FAISS vector store containing the text embeddings locally.
-
-Here are some code examples to illustrate the functionality of the code:
-
-- Fetch Latest News:
-```python
-from news_scrapper import main
-
-main()
-```
-
-- Load PDF Documents:
-```python
-from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader
-
-DATA_PATH = 'data/'
-
-loader = DirectoryLoader(DATA_PATH, glob='*.pdf', loader_cls=PyPDFLoader)
-documents = loader.load()
-```
-
-- Split Text into Chunks:
-```python
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=512, chunk_overlap=64)
-texts = text_splitter.split_documents(documents)
-```
-
-- Generate Text Embeddings:
-```python
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-
-embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
-batch_embeddings = embeddings.embed_documents(batch_content)
-```
-
-- Batch Processing:
-```python
-batch_size = 50
-total_texts = len(texts)
-
-for i in range(0, total_texts, batch_size):
-    batch = texts[i:i + batch_size]
-    batch_content = [doc.page_content for doc in batch]
-    # Process the batch and add embeddings to the vector store
-```
-
-- Save Vector Store:
-```python
-from langchain_community.vectorstores import FAISS
-
-DB_FAISS_PATH = 'vectorstore/db_faiss'
-
-db.save_local(DB_FAISS_PATH)
-```
-
-## main.py
-
-This code defines a chatbot system that answers user queries about Dr. Babasaheb Ambedkar Technological University using Google's Generative AI and a vector database for question answering. The chatbot is designed to provide accurate and context-aware responses to queries related to the university.
-
-### Key Concepts
-
-- Google's Generative AI: The chatbot system utilizes Google's Generative AI model, specifically the **"gemini-1.5-flash-latest"** model, to generate responses to user queries. This model is trained on a large corpus of text data and is capable of generating human-like responses.
-
-- Vector Database: The chatbot system uses a vector database, implemented using the FAISS library, to store pre-computed document embeddings. These embeddings are used to retrieve relevant documents based on user queries, enabling the chatbot to provide accurate responses.
-
-- Question Answering Chain: The chatbot system sets up a question-answering chain that combines the Generative AI model and the vector database. This chain takes user queries as input, retrieves relevant documents from the vector database, and generates responses using the Generative AI model.
-
-## Code Structure
-The code is structured into several sections:
-
-1. **Imports and Initial Setup**: This section imports the necessary libraries and modules for AI, vector store, and environment management. It also loads the Google API key from environment variables.
-
-2. **Path and Prompt Template**: This section defines the path to the **FAISS vector database** and creates a custom prompt template that guides the AI on how to respond to questions about the university.
-
-3. **Functions**: This section defines several functions used in the chatbot system, including functions for setting the custom prompt, loading the language model, setting up the question-answering chain, and processing user input.
-
-4. **Usage Flow**: This section outlines the flow of the chatbot system, including loading environment variables, defining paths and prompts, loading and setting up models, and processing user input.
-
-Here are some code examples to illustrate the usage of the chatbot system:
-
-- Setting up the custom prompt template:
-
-```python
-custom_prompt_template = """
-    You are an intelligent assistant helping the users with their questions about admission information, information related to university, exam queries, 
-    at Dr. Babasaheb Ambedkar Technological University and
-    you also know multiple human language spoken in India, so you are basically multilingual and you know marathi language also.
-    Formatting
-    You can send formatted text messages to Capacities, using the following syntax:
-    - for bullets
-    **text** for bold text
-
-    Rules:
-    Strictly use ONLY the following pieces of context to answer the question.
-    If you have external knowledge about the question, provide a answer. 
-    If users greets you, you should also greet them back and you are chatbot provided by Dr. Babasaheb Ambedkar Technological University.
-    If any website link is provided along the context provide it also but if not then don't provide any website.
-    If the question is not related to university, you should say "Please ask question related to university".
-    Maintain the chat history and context of the conversation. 
-    
-
-
-Do not try to make up an answer:
-    If the context is empty, just say "not enough information provided, but here is link to the official website: https://dbatu.ac.in/"
-
-CONTEXT:
-{context}
-
-QUESTION:
-{question}
-
-Helpful Answer:
-"""
-
-def set_custom_prompt():
-    """
-    Prompt template for QA retrieval for each vectorstore
-    """
-    prompt = PromptTemplate(template=custom_prompt_template,
-                            input_variables=['context', 'question'])
-    return prompt
-```
-
-- Loading the language model:
-
-```python
-def load_llm():
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.6)
-    return llm
-
-```
-- Setting up the question-answering chain:
-
-
-```python
-def get_conversational_chain():
-    prompt = set_custom_prompt()
-    llm = load_llm()
-    chain = load_qa_chain(llm, chain_type="stuff", prompt=prompt)
-    return chain
-```
-- Processing user input and generating a response:
-
-```python
-def user_input(user_question):
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
-    db = FAISS.load_local(DB_FAISS_PATH, embeddings, allow_dangerous_deserialization=True)
-    docs = db.similarity_search(user_question)
-    chain = get_conversational_chain()
-    response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
-    return response
-```
-
-### app.py
-It set up a Flask web application that integrates with a Telegram bot. The bot will use Google's Generative AI to provide intelligent responses to user queries. 
-
-## Key Concepts
-
-
-- **Flask**: Flask is a micro web framework written in Python. It allows us to build web applications easily and quickly.
-
-- **Telegram Bot API**: Telegram provides a Bot API that allows developers to interact with Telegram bots. We will use this API to send and receive messages from our bot.
-
-- **Google Generative AI**: Google's Generative AI is a powerful language model that can generate human-like text based on given prompts. We will leverage this AI model to generate intelligent responses to user queries.
-
-
-
-## Code Structure
-The code provided consists of several sections, each serving a specific purpose. Let's go through each section and understand its functionality:
-
-1. **Imports and Initial Setup**: This section imports the necessary libraries and modules for Flask, Google Generative AI, environment variable management, and the `user_input` function from `main.py`. It also loads the environment variables using dotenv.
-
-2. **Google Generative AI Configuration**: Here, we configure the Google Generative AI with the API key obtained from the environment variables.
-
-3. **Flask App and Telegram Bot Setup**: This section initializes a Flask app and retrieves the Telegram Bot Token from the environment variables.
-
-4. **Helper Functions**: This section contains three helper functions:
-
-    - **generate_answer(question)**: This function uses the `user_input` function to generate an answer to the user's question by calling the language model and retrieving the output text.
-
-    - **message_parser(message)**: This function parses incoming messages from Telegram to extract the chat ID and message content. It handles both text and voice messages and returns the chat ID, message content, and message type.
-
-    - **send_message_telegram(chat_id, text)**: This function sends a text message to the specified chat ID on Telegram using the Telegram Bot API.
-
-5. **Flask Routes**: This section defines the routes for the Flask app:
-
-    - index(): This route handles both GET and POST requests. For POST requests, it parses the incoming message JSON, extracts the chat ID and content using the `message_parser` function, generates an appropriate response based on the message type, and sends the generated response back to the user on Telegram. For GET requests, it returns a simple HTML message indicating an error.
-
-6. **Main Application Entry Point**: This section runs the Flask app on 0.0.0.0 at port 5000 with debug mode disabled.
-
-
-Let's take a look at some code examples to better understand how the different components work together:
-
-1. Example of generating an answer using the `generate_answer` function:
-```python
-def generate_answer(question):
-    answer = user_input(question)['output_text']
-    return answer
-```
-2. Example of parsing incoming messages using the `message_parser` function:
-
-```python
-def message_parser(message):
-    try:
-        chat_id = message['message']['chat']['id']
-        if 'text' in message['message']:
-            text = message['message']['text']
-            return chat_id, text, 'text'
-        elif 'voice' in message['message']:
-            file_id = message['message']['voice']['file_id']
-            return chat_id, file_id, 'voice'
-        else:
-            return chat_id, None, None
-    except KeyError as e:
-        return None, None, None
-```
-3. Example of sending a message to Telegram using the `send_message_telegram` function:
-
-```python
-def message_parser(message):
-    try:
-        chat_id = message['message']['chat']['id']
-        if 'text' in message['message']:
-            text = message['message']['text']
-            return chat_id, text, 'text'
-        elif 'voice' in message['message']:
-            file_id = message['message']['voice']['file_id']
-            return chat_id, file_id, 'voice'
-        else:
-            return chat_id, None, None
-    except KeyError as e:
-        return None, None, None
-```
