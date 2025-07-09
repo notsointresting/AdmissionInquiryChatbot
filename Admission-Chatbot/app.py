@@ -3,7 +3,7 @@ import requests
 import google.generativeai as genai
 import os
 from dotenv import load_dotenv
-from main import user_input
+from core import user_input
 from io import BytesIO
 
 load_dotenv()
