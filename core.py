@@ -125,9 +125,9 @@ Your responses should sound natural and conversational. Remember you are an offi
 """
 
     prompt_from_hub = None
-    customization_successful = False        try:
-            pulled_prompt = hub.pull("hwchase17/react-chat")
-
+    customization_successful = False        
+    try:
+        pulled_prompt = hub.pull("hwchase17/react-chat")
         if isinstance(pulled_prompt, ChatPromptTemplate) and pulled_prompt.messages:
             if isinstance(pulled_prompt.messages[0], SystemMessage) or \
                (hasattr(pulled_prompt.messages[0], 'prompt') and isinstance(pulled_prompt.messages[0].prompt, SystemMessage)):
