@@ -1,81 +1,94 @@
 import requests
 from bs4 import BeautifulSoup
-from fpdf import FPDF  # Import FPDF
+from fpdf import FPDF
 import os
 
+# Font fallback class
+class SmartPDF(FPDF):
+    def __init__(self):
+        super().__init__()
+        self.default_font = "Arial"
+        self.unicode_font = "Noto"
+        self.font_path = "fonts/NotoSansDevanagari-Regular.ttf"
+        self.add_font(self.unicode_font, "", self.font_path, uni=True)
+        self.set_font(self.default_font, size=12)
+
+    def safe_cell(self, w, h, text, *args, **kwargs):
+        try:
+            self.set_font(self.default_font, size=12)
+            self.cell(w, h, text, *args, **kwargs)
+        except Exception as e:
+            print(f"[⚠️ Unicode fallback] '{text}' failed with default font. Switching to Unicode.\n→ Error: {e}")
+            self.set_font(self.unicode_font, size=12)
+            self.cell(w, h, text, *args, **kwargs)
+
 def get_latest_news(url):
-    """
-    Fetches the latest news from the given URL and returns a list of dictionaries containing:
-        - title: The news title
-        - link: The URL of the news article
-        - date: The date the news was uploaded
-    """
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
 
-    response = requests.get(url)
-    response.raise_for_status()  # Raise an exception if there's an HTTP error
+        soup = BeautifulSoup(response.content, 'html.parser')
+        news_articles = soup.find_all('article', class_='exad-post-grid-three exad-col')
 
-    soup = BeautifulSoup(response.content, 'html.parser')
+        news_list = []
+        for article in news_articles[:5]:
+            title = article.find('h3').find('a').text.strip()
+            link = article.find('h3').find('a')['href']
+            date = article.find('li', class_='exad-post-date').find('a').text.strip()
 
-    news_articles = soup.find_all('article', class_='exad-post-grid-three exad-col')
-    
+            news_list.append({'title': title, 'link': link, 'date': date})
+        return news_list
 
-    news_list = []
-    for article in news_articles[:5]:  # Get only the first 5 articles
-        title = article.find('h3').find('a').text.strip()
-        link = article.find('h3').find('a')['href']
-        date = article.find('li', class_='exad-post-date').find('a').text.strip()
+    except Exception as e:
+        print(f"[❌ ERROR] Failed to scrape {url}: {e}")
+        return []
 
-        news_item = {
-            'title': title,
-            'link': link,
-            'date': date
-        }
-        news_list.append(news_item)
-
-    return news_list
-
-def create_pdf(news_list_1, news_list_2, filename):
-    """
-    Creates a PDF file with the latest news information from both URLs.
-    """
-
-    pdf = FPDF()  
+def create_pdf(all_news_dict, filename):
+    pdf = SmartPDF()
     pdf.add_page()
-    pdf.set_font('Arial', 'B', 16)
 
-    # Add news from the first URL
-    pdf.cell(0, 10, 'Latest News from https://dbatu.ac.in/students-notice-board/', 0, 1, 'C')
-    pdf.set_font('Arial', '', 12)
-    for news in news_list_1:
-        pdf.cell(0, 5, f"Title: {news['title']}", 0, 1)
-        pdf.cell(0, 5, f"Link: {news['link']}", 0, 1)
-        pdf.cell(0, 5, f"Date: {news['date']}", 0, 1)
-        pdf.cell(0, 10, '', 0, 1)
+    for source, news_list in all_news_dict.items():
+        pdf.set_font('Arial', 'B', 14)
+        pdf.cell(0, 10, f"Latest News from {source}", 0, 1, 'C')
 
-    # Add news from the second URL
-    pdf.cell(0, 10, 'Latest News from https://dbatu.ac.in/exam-section1/', 0, 1, 'C')
-    pdf.set_font('Arial', '', 12)
-    for news in news_list_2:
-        pdf.cell(0, 5, f"Title: {news['title']}", 0, 1)
-        pdf.cell(0, 5, f"Link: {news['link']}", 0, 1)
-        pdf.cell(0, 5, f"Date: {news['date']}", 0, 1)
-        pdf.cell(0, 10, '', 0, 1)
+        pdf.set_font('Arial', '', 12)
+        for news in news_list:
+            pdf.safe_cell(0, 5, f"Title: {news['title']}", 0, 1)
+            pdf.safe_cell(0, 5, f"Link: {news['link']}", 0, 1)
+            pdf.safe_cell(0, 5, f"Date: {news['date']}", 0, 1)
+            pdf.cell(0, 8, '', 0, 1)  # Spacing between news items
+
+        pdf.cell(0, 12, '', 0, 1)  # Spacing between sections
 
     filepath = os.path.join('data', filename)
-
     pdf.output(filepath, 'F')
-
+    print(f"[✅] PDF saved to: {filepath}")
 
 def main():
     pdf_filename = 'latest_news.pdf'
     pdf_filepath = os.path.join('data', pdf_filename)
     if os.path.exists(pdf_filepath):
         os.remove(pdf_filepath)
-    url_1 = "https://dbatu.ac.in/students-notice-board/"
-    url_2 = "https://dbatu.ac.in/exam-section1/"
-    latest_news_1 = get_latest_news(url_1)
-    latest_news_2 = get_latest_news(url_2)
 
-    create_pdf(latest_news_1, latest_news_2, 'latest_news.pdf') 
+    urls = {
+        "https://dbatu.ac.in/students-notice-board/": "Student Notice Board",
+        "https://dbatu.ac.in/exam-section1/": "Exam Section",
+        "https://dbatu.ac.in/registrar/": "Registrar",
+        "https://dbatu.ac.in/events/": "Events",
+        "https://dbatu.ac.in/fees-structure/": "Fees Structure",
+        "https://dbatu.ac.in/student-corner/": "Student Corner",
+        "https://dbatu.ac.in/admissions/": "Admissions",
+        "https://dbatu.ac.in/academic-section-student-section-admission-contact-details/": "Academic & Admission Contacts",
+        "https://dbatu.ac.in/academic-programs/": "Academic Programs",
+        "https://dbatu.ac.in/research/": "Research",
+        "https://cse.dbatu.ac.in/": "CSE Department"
+    }
 
-    
+    all_news = {}
+
+    for url, section_name in urls.items():
+        print(f"[ℹ️] Scraping: {section_name}")
+        latest_news = get_latest_news(url)
+        all_news[section_name] = latest_news
+
+    create_pdf(all_news, pdf_filename)
